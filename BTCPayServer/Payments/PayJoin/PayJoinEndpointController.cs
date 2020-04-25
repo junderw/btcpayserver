@@ -375,6 +375,9 @@ namespace BTCPayServer.Payments.PayJoin
             Utils.Shuffle(newTx.Inputs, rand);
             Utils.Shuffle(newTx.Outputs, rand);
 
+            // We need this for P2SH GetHash() calculation
+            var newTx2 = newTx.Clone();
+
             // Remove old signatures as they are not valid anymore
             foreach (var input in newTx.Inputs)
             {
@@ -446,7 +449,12 @@ namespace BTCPayServer.Payments.PayJoin
                 signedInput.Sign(privateKey);
                 signedInput.FinalizeInput();
                 newTx.Inputs[signedInput.Index].WitScript = newPsbt.Inputs[(int)signedInput.Index].FinalScriptWitness;
+                newTx.Inputs[signedInput.Index].ScriptSig = newPsbt.Inputs[(int)signedInput.Index].FinalScriptSig;
+                newTx2.Inputs[signedInput.Index].WitScript = newPsbt.Inputs[(int)signedInput.Index].FinalScriptWitness;
+                newTx2.Inputs[signedInput.Index].ScriptSig = newPsbt.Inputs[(int)signedInput.Index].FinalScriptSig;
             }
+            // Needed for P2SH GetHash() calculation
+            var newPsbt2 = PSBT.FromTransaction(newTx2, network.NBitcoinNetwork);
 
             // Add the transaction to the payments with a confirmation of -1.
             // This will make the invoice paid even if the user do not
@@ -458,7 +466,7 @@ namespace BTCPayServer.Payments.PayJoin
             originalPaymentData.ConfirmationCount = -1;
             originalPaymentData.PayjoinInformation = new PayjoinInformation()
             {
-                CoinjoinTransactionHash = GetExpectedHash(newPsbt),
+                CoinjoinTransactionHash = GetExpectedHash(newPsbt2),
                 CoinjoinValue = originalPaymentValue - ourFeeContribution,
                 ContributedOutPoints = selectedUTXOs.Select(o => o.Key).ToArray()
             };
