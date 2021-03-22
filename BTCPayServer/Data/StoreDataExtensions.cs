@@ -1,15 +1,10 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Claims;
 using System.Text;
-using System.Threading.Tasks;
 using BTCPayServer.Payments;
-using BTCPayServer.Security;
 using BTCPayServer.Services.Rates;
-using NBitcoin;
 using NBXplorer;
-using NBXplorer.DerivationStrategy;
 using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Data
@@ -20,8 +15,7 @@ namespace BTCPayServer.Data
         public static PaymentMethodId GetDefaultPaymentId(this StoreData storeData, BTCPayNetworkProvider networks)
         {
             PaymentMethodId[] paymentMethodIds = storeData.GetEnabledPaymentIds(networks);
-
-            var defaultPaymentId = string.IsNullOrEmpty(storeData.DefaultCrypto) ? null : PaymentMethodId.Parse(storeData.DefaultCrypto);
+            PaymentMethodId.TryParse(storeData.DefaultCrypto, out var defaultPaymentId);
             var chosen = paymentMethodIds.FirstOrDefault(f => f == defaultPaymentId) ??
                          paymentMethodIds.FirstOrDefault(f => f.CryptoCode == defaultPaymentId?.CryptoCode) ??
                          paymentMethodIds.FirstOrDefault();
@@ -42,16 +36,19 @@ namespace BTCPayServer.Data
 
         public static void SetDefaultPaymentId(this StoreData storeData, PaymentMethodId defaultPaymentId)
         {
-            storeData.DefaultCrypto = defaultPaymentId.ToString();
+            storeData.DefaultCrypto = defaultPaymentId?.ToString();
         }
 #pragma warning restore CS0618
 
-        
+
         public static StoreBlob GetStoreBlob(this StoreData storeData)
         {
             var result = storeData.StoreBlob == null ? new StoreBlob() : new Serializer(null).ToObject<StoreBlob>(Encoding.UTF8.GetString(storeData.StoreBlob));
             if (result.PreferredExchange == null)
                 result.PreferredExchange = CoinGeckoRateProvider.CoinGeckoName;
+
+            if (result.Hints == null)
+                result.Hints = new StoreBlob.StoreHints();
             return result;
         }
 
@@ -69,24 +66,18 @@ namespace BTCPayServer.Data
         {
             if (storeData == null)
                 throw new ArgumentNullException(nameof(storeData));
-            networks = networks.UnfilteredNetworks;
 #pragma warning disable CS0618
             bool btcReturned = false;
-
-            // Legacy stuff which should go away
-            if (!string.IsNullOrEmpty(storeData.DerivationStrategy))
-            {
-                btcReturned = true;
-                yield return DerivationSchemeSettings.Parse(storeData.DerivationStrategy, networks.BTC);
-            }
-
 
             if (!string.IsNullOrEmpty(storeData.DerivationStrategies))
             {
                 JObject strategies = JObject.Parse(storeData.DerivationStrategies);
                 foreach (var strat in strategies.Properties())
                 {
-                    var paymentMethodId = PaymentMethodId.Parse(strat.Name);
+                    if (!PaymentMethodId.TryParse(strat.Name, out var paymentMethodId))
+                    {
+                        continue;
+                    }
                     var network = networks.GetNetwork<BTCPayNetworkBase>(paymentMethodId.CryptoCode);
                     if (network != null)
                     {
@@ -130,11 +121,9 @@ namespace BTCPayServer.Data
             bool existing = false;
             foreach (var strat in strategies.Properties().ToList())
             {
-                var stratId = PaymentMethodId.Parse(strat.Name);
-                if (stratId.IsBTCOnChain)
+                if (!PaymentMethodId.TryParse(strat.Name, out var stratId))
                 {
-                    // Legacy stuff which should go away
-                    storeData.DerivationStrategy = null;
+                    continue;
                 }
                 if (stratId == paymentMethodId)
                 {
@@ -150,12 +139,7 @@ namespace BTCPayServer.Data
                     break;
                 }
             }
-
-            if (!existing && supportedPaymentMethod == null && paymentMethodId.IsBTCOnChain)
-            {
-                storeData.DerivationStrategy = null;
-            }
-            else if (!existing && supportedPaymentMethod != null)
+            if (!existing && supportedPaymentMethod != null)
                 strategies.Add(new JProperty(supportedPaymentMethod.PaymentId.ToString(), PaymentMethodExtensions.Serialize(supportedPaymentMethod)));
             storeData.DerivationStrategies = strategies.ToString();
 #pragma warning restore CS0618

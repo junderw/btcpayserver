@@ -1,16 +1,17 @@
-﻿using BTCPayServer.Data;
-using System.Linq;
+#nullable enable
 using System.Threading;
 using System.Threading.Tasks;
+using BTCPayServer.Abstractions.Contracts;
+using BTCPayServer.Data;
 using BTCPayServer.Events;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 
 namespace BTCPayServer.Services
 {
-    public class SettingsRepository
+    public class SettingsRepository : ISettingsRepository
     {
-        private ApplicationDbContextFactory _ContextFactory;
+        private readonly ApplicationDbContextFactory _ContextFactory;
         private readonly EventAggregator _EventAggregator;
 
         public SettingsRepository(ApplicationDbContextFactory contextFactory, EventAggregator eventAggregator)
@@ -19,9 +20,9 @@ namespace BTCPayServer.Services
             _EventAggregator = eventAggregator;
         }
 
-        public async Task<T> GetSettingAsync<T>(string name = null)
+        public async Task<T?> GetSettingAsync<T>(string? name = null) where T : class
         {
-            name ??= typeof(T).FullName;
+            name ??= typeof(T).FullName ?? string.Empty;
             using (var ctx = _ContextFactory.CreateContext())
             {
                 var data = await ctx.Settings.Where(s => s.Id == name).FirstOrDefaultAsync();
@@ -30,17 +31,11 @@ namespace BTCPayServer.Services
                 return Deserialize<T>(data.Value);
             }
         }
-
-        public async Task UpdateSetting<T>(T obj, string name = null)
+        public async Task UpdateSetting<T>(T obj, string? name = null) where T : class
         {
-            name ??= obj.GetType().FullName;
             using (var ctx = _ContextFactory.CreateContext())
             {
-                var settings = new SettingData();
-                settings.Id = name;
-                settings.Value = Serialize(obj);
-                ctx.Attach(settings);
-                ctx.Entry(settings).State = EntityState.Modified;
+                var settings = UpdateSettingInContext<T>(ctx, obj, name);
                 try
                 {
                     await ctx.SaveChangesAsync();
@@ -55,7 +50,19 @@ namespace BTCPayServer.Services
             {
                 Settings = obj
             });
+        }
 
+        public SettingData UpdateSettingInContext<T>(ApplicationDbContext ctx, T obj, string? name = null) where T : class
+        {
+            name ??= obj.GetType().FullName ?? string.Empty;
+            var settings = new SettingData();
+            settings.Id = name;
+            settings.Value = Serialize(obj);
+
+            ctx.Attach(settings);
+            ctx.Entry(settings).State = EntityState.Modified;
+            
+            return settings;
         }
 
         private T Deserialize<T>(string value)
@@ -67,8 +74,8 @@ namespace BTCPayServer.Services
         {
             return JsonConvert.SerializeObject(obj);
         }
-        
-        public async Task<T> WaitSettingsChanged<T>(CancellationToken cancellationToken = default)
+
+        public async Task<T> WaitSettingsChanged<T>(CancellationToken cancellationToken = default) where T : class
         {
             return (await _EventAggregator.WaitNext<SettingsChanged<T>>(cancellationToken)).Settings;
         }

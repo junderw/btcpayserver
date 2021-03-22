@@ -1,26 +1,22 @@
-﻿using System;
-using System.Linq;
-using System.Text;
+using System;
 using System.Text.Encodings.Web;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
-using BTCPayServer.Models;
+using BTCPayServer.Abstractions.Constants;
+using BTCPayServer.Data;
 using BTCPayServer.Models.ManageViewModels;
+using BTCPayServer.Security;
+using BTCPayServer.Security.GreenField;
 using BTCPayServer.Services;
-using Microsoft.AspNetCore.Hosting;
+using BTCPayServer.Services.Mails;
 using BTCPayServer.Services.Stores;
 using BTCPayServer.Services.Wallets;
-using BTCPayServer.Services.Mails;
-using System.Globalization;
-using BTCPayServer.Security;
 using BTCPayServer.U2F;
-using BTCPayServer.Data;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using BTCPayServer.Security.GreenField;
+using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Controllers
 {
@@ -33,13 +29,13 @@ namespace BTCPayServer.Controllers
         private readonly EmailSenderFactory _EmailSenderFactory;
         private readonly ILogger _logger;
         private readonly UrlEncoder _urlEncoder;
-        IWebHostEnvironment _Env;
+        readonly IWebHostEnvironment _Env;
         public U2FService _u2FService;
         private readonly BTCPayServerEnvironment _btcPayServerEnvironment;
         private readonly APIKeyRepository _apiKeyRepository;
         private readonly IAuthorizationService _authorizationService;
         private readonly LinkGenerator _linkGenerator;
-        StoreRepository _StoreRepository;
+        readonly StoreRepository _StoreRepository;
 
 
 
@@ -51,8 +47,8 @@ namespace BTCPayServer.Controllers
           UrlEncoder urlEncoder,
           BTCPayWalletProvider walletProvider,
           StoreRepository storeRepository,
-          IWebHostEnvironment env, 
-          U2FService  u2FService,
+          IWebHostEnvironment env,
+          U2FService u2FService,
           BTCPayServerEnvironment btcPayServerEnvironment,
           APIKeyRepository apiKeyRepository,
           IAuthorizationService authorizationService,
@@ -86,7 +82,6 @@ namespace BTCPayServer.Controllers
             {
                 Username = user.UserName,
                 Email = user.Email,
-                PhoneNumber = user.PhoneNumber,
                 IsEmailConfirmed = user.EmailConfirmed
             };
             return View(model);
@@ -101,8 +96,6 @@ namespace BTCPayServer.Controllers
                 return View(model);
             }
 
-            bool needUpdate = false;
-
             var user = await _userManager.GetUserAsync(User);
             if (user == null)
             {
@@ -112,33 +105,22 @@ namespace BTCPayServer.Controllers
             var email = user.Email;
             if (model.Email != email)
             {
+                if (!(await _userManager.FindByEmailAsync(model.Email) is null))
+                {
+                    TempData[WellKnownTempData.ErrorMessage] = "The email address is already in use with an other account.";
+                    return RedirectToAction(nameof(Index));
+                }
+                var setUserResult = await _userManager.SetUserNameAsync(user, model.Email);
+                if (!setUserResult.Succeeded)
+                {
+                    throw new ApplicationException($"Unexpected error occurred setting email for user with ID '{user.Id}'.");
+                }
                 var setEmailResult = await _userManager.SetEmailAsync(user, model.Email);
                 if (!setEmailResult.Succeeded)
                 {
                     throw new ApplicationException($"Unexpected error occurred setting email for user with ID '{user.Id}'.");
                 }
-                await _userManager.SetUserNameAsync(user, model.Username);
             }
-
-            var phoneNumber = user.PhoneNumber;
-            if (model.PhoneNumber != phoneNumber)
-            {
-                var setPhoneResult = await _userManager.SetPhoneNumberAsync(user, model.PhoneNumber);
-                if (!setPhoneResult.Succeeded)
-                {
-                    throw new ApplicationException($"Unexpected error occurred setting phone number for user with ID '{user.Id}'.");
-                }
-            }
-
-            if (needUpdate)
-            {
-                var result = await _userManager.UpdateAsync(user);
-                if (!result.Succeeded)
-                {
-                    throw new ApplicationException($"Unexpected error occurred updating user with ID '{user.Id}'.");
-                }
-            }
-
             TempData[WellKnownTempData.SuccessMessage] = "Your profile has been updated";
             return RedirectToAction(nameof(Index));
         }

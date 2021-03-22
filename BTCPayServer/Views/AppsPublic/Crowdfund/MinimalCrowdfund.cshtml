@@ -15,19 +15,19 @@
                     @Model.Title
                     @if (!Model.Started && Model.StartDate.HasValue)
                     {
-                        <span class="h6 text-muted" >
+                        <span class="h6 text-muted">
                             Starts @Model.StartDate.Value.Subtract(DateTime.Now.ToUniversalTime())
                         </span>
                     }
                     else if (Model.Started && !Model.Ended && Model.EndDate.HasValue)
                     {
-                        <span class="h6 text-muted" >
+                        <span class="h6 text-muted">
                             Ends @Model.EndDate.Value.Subtract(DateTime.Now.ToUniversalTime())
                         </span>
                     }
                     else if (Model.Started && !Model.Ended && !Model.EndDate.HasValue)
                     {
-                        <span class="h6 text-muted" :title="startDate"  title="No set end date">
+                        <span class="h6 text-muted" :title="startDate" title="No set end date">
                             Currently Active!
                         </span>
                     }
@@ -87,7 +87,7 @@
                         </h5>
                         <h5 class="text-muted">Contributors</h5>
                     </div>
-                    @if (Model.Started && !Model.Ended)
+                    @if (Model.Started && !Model.Ended && Model.EndDate.HasValue)
                     {
                         <div class="col-sm">
                             <h5>

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -9,7 +9,7 @@ namespace BTCPayServer.Services
 {
     public class WalletRepository
     {
-        private ApplicationDbContextFactory _ContextFactory;
+        private readonly ApplicationDbContextFactory _ContextFactory;
 
         public WalletRepository(ApplicationDbContextFactory contextFactory)
         {
@@ -38,7 +38,7 @@ namespace BTCPayServer.Services
             }
         }
 
-        public async Task<Dictionary<string, WalletTransactionInfo>> GetWalletTransactionsInfo(WalletId walletId)
+        public async Task<Dictionary<string, WalletTransactionInfo>> GetWalletTransactionsInfo(WalletId walletId, string[] transactionIds = null)
         {
             if (walletId == null)
                 throw new ArgumentNullException(nameof(walletId));
@@ -46,6 +46,7 @@ namespace BTCPayServer.Services
             {
                 return (await ctx.WalletTransactions
                                 .Where(w => w.WalletDataId == walletId.ToString())
+                                .Where(data => transactionIds == null || transactionIds.Contains(data.TransactionId))
                                 .Select(w => w)
                                 .ToArrayAsync())
                                 .ToDictionary(w => w.TransactionId, w => w.GetBlobInfo());
@@ -89,7 +90,7 @@ namespace BTCPayServer.Services
                     {
                         await ctx.SaveChangesAsync();
                     }
-                    catch(DbUpdateException) // the Wallet does not exists in the DB
+                    catch (DbUpdateException) // the Wallet does not exists in the DB
                     {
                         await SetWalletInfo(walletId, new WalletBlobInfo());
                         await ctx.SaveChangesAsync();

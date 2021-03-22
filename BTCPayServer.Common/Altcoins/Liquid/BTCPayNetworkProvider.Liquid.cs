@@ -1,7 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+#if ALTCOINS
 using NBitcoin;
 using NBitcoin.Altcoins;
 using NBitcoin.Altcoins.Elements;
@@ -16,7 +13,7 @@ namespace BTCPayServer
             var nbxplorerNetwork = NBXplorerNetworkProvider.GetFromCryptoCode("LBTC");
             Add(new ElementsBTCPayNetwork()
             {
-                AssetId = NetworkType == NetworkType.Mainnet ? ElementsParams<Liquid>.PeggedAssetId: ElementsParams<Liquid.LiquidRegtest>.PeggedAssetId,
+                AssetId = NetworkType == ChainName.Mainnet ? ElementsParams<Liquid>.PeggedAssetId : ElementsParams<Liquid.LiquidRegtest>.PeggedAssetId,
                 CryptoCode = "LBTC",
                 NetworkCryptoCode = "LBTC",
                 DisplayName = "Liquid Bitcoin",
@@ -25,12 +22,12 @@ namespace BTCPayServer
                     "LBTC_X = LBTC_BTC * BTC_X",
                     "LBTC_BTC = 1",
                 },
-                BlockExplorerLink = NetworkType == NetworkType.Mainnet ? "https://blockstream.info/liquid/tx/{0}" : "https://blockstream.info/testnet/liquid/tx/{0}",
+                BlockExplorerLink = NetworkType == ChainName.Mainnet ? "https://blockstream.info/liquid/tx/{0}" : "https://blockstream.info/testnet/liquid/tx/{0}",
                 NBXplorerNetwork = nbxplorerNetwork,
                 UriScheme = "liquidnetwork",
                 CryptoImagePath = "imlegacy/liquid.png",
                 DefaultSettings = BTCPayDefaultSettings.GetDefaultSettings(NetworkType),
-                CoinType = NetworkType == NetworkType.Mainnet ? new KeyPath("1776'") : new KeyPath("1'"),
+                CoinType = NetworkType == ChainName.Mainnet ? new KeyPath("1776'") : new KeyPath("1'"),
                 SupportRBF = true
             });
         }
@@ -38,3 +35,4 @@ namespace BTCPayServer
 
 
 }
+#endif

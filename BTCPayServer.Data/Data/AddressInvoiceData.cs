@@ -1,7 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+using System;
+using Microsoft.EntityFrameworkCore;
 
 namespace BTCPayServer.Data
 {
@@ -12,25 +10,21 @@ namespace BTCPayServer.Data
         /// For not having exceptions thrown by two address on different network, we suffix by "#CRYPTOCODE" 
         /// </summary>
         [Obsolete("Use GetHash instead")]
-        public string Address
-        {
-            get; set;
-        }
+        public string Address { get; set; }
+        public InvoiceData InvoiceData { get; set; }
+        public string InvoiceDataId { get; set; }
+        public DateTimeOffset? CreatedTime { get; set; }
 
-        public InvoiceData InvoiceData
-        {
-            get; set;
-        }
 
-        public string InvoiceDataId
+        internal static void OnModelCreating(ModelBuilder builder)
         {
-            get; set;
+            builder.Entity<AddressInvoiceData>()
+                   .HasOne(o => o.InvoiceData)
+                   .WithMany(i => i.AddressInvoices).OnDelete(DeleteBehavior.Cascade);
+            builder.Entity<AddressInvoiceData>()
+#pragma warning disable CS0618
+                .HasKey(o => o.Address);
+#pragma warning restore CS0618
         }
-
-        public DateTimeOffset? CreatedTime
-        {
-            get; set;
-        }
-
     }
 }

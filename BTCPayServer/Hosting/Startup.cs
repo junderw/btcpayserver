@@ -1,28 +1,29 @@
-﻿using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.DataProtection;
-using Microsoft.Extensions.Hosting;
-
-using Microsoft.AspNetCore.Builder;
 using System;
-using Microsoft.Extensions.DependencyInjection;
-using BTCPayServer.Filters;
-using BTCPayServer.Models;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.HttpOverrides;
-using BTCPayServer.Data;
-using Microsoft.Extensions.Logging;
-using BTCPayServer.Logging;
-using Microsoft.Extensions.Configuration;
-using BTCPayServer.Configuration;
 using System.IO;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using BTCPayServer.Security;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Microsoft.Net.Http.Headers;
 using System.Net;
+using BTCPayServer.Configuration;
+using BTCPayServer.Data;
+using BTCPayServer.Filters;
+using BTCPayServer.Logging;
 using BTCPayServer.PaymentRequest;
+using BTCPayServer.Plugins;
+using BTCPayServer.Security;
 using BTCPayServer.Services.Apps;
 using BTCPayServer.Storage;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Microsoft.Net.Http.Headers;
+using NBitcoin;
 
 namespace BTCPayServer.Hosting
 {
@@ -34,7 +35,8 @@ namespace BTCPayServer.Hosting
             _Env = env;
             LoggerFactory = loggerFactory;
         }
-        IWebHostEnvironment _Env;
+
+        readonly IWebHostEnvironment _Env;
         public IConfiguration Configuration
         {
             get; set;
@@ -44,11 +46,10 @@ namespace BTCPayServer.Hosting
         public void ConfigureServices(IServiceCollection services)
         {
             Logs.Configure(LoggerFactory);
-            services.ConfigureBTCPayServer(Configuration);
             services.AddMemoryCache();
             services.AddDataProtection()
                 .SetApplicationName("BTCPay Server")
-                .PersistKeysToFileSystem(GetDataDir());
+                .PersistKeysToFileSystem(new DirectoryInfo(new DataDirectories().Configure(Configuration).DataDir));
             services.AddIdentity<ApplicationUser, IdentityRole>()
                 .AddEntityFrameworkStores<ApplicationDbContext>()
                 .AddDefaultTokenProviders();
@@ -57,7 +58,7 @@ namespace BTCPayServer.Hosting
             services.AddProviderStorage();
             services.AddSession();
             services.AddSignalR();
-            services.AddMvc(o =>
+            var mvcBuilder= services.AddMvc(o =>
             {
                 o.Filters.Add(new XFrameOptionsAttribute("DENY"));
                 o.Filters.Add(new XContentTypeOptionsAttribute("nosniff"));
@@ -75,18 +76,27 @@ namespace BTCPayServer.Hosting
             .ConfigureApiBehaviorOptions(options =>
             {
                 var builtInFactory = options.InvalidModelStateResponseFactory;
-
                 options.InvalidModelStateResponseFactory = context =>
                 {
                     context.HttpContext.Response.StatusCode = (int)HttpStatusCode.UnprocessableEntity;
                     return builtInFactory(context);
                 };
             })
+            .AddRazorOptions(o =>
+            {
+                // /Components/{View Component Name}/{View Name}.cshtml
+                o.ViewLocationFormats.Add("/{0}.cshtml");
+                o.PageViewLocationFormats.Add("/{0}.cshtml");
+            })
             .AddNewtonsoftJson()
 #if RAZOR_RUNTIME_COMPILE
             .AddRazorRuntimeCompilation()
 #endif
+            .AddPlugins(services, Configuration, LoggerFactory)
             .AddControllersAsServices();
+
+            
+
             services.TryAddScoped<ContentSecurityPolicies>();
             services.Configure<IdentityOptions>(options =>
             {
@@ -146,29 +156,26 @@ namespace BTCPayServer.Hosting
             IWebHostEnvironment env,
             IServiceProvider prov,
             BTCPayServerOptions options,
+            IOptions<DataDirectories> dataDirectories,
             ILoggerFactory loggerFactory)
         {
             Logs.Configuration.LogInformation($"Root Path: {options.RootPath}");
             if (options.RootPath.Equals("/", StringComparison.OrdinalIgnoreCase))
             {
-                ConfigureCore(app, env, prov, loggerFactory, options);
+                ConfigureCore(app, env, prov, loggerFactory, dataDirectories);
             }
             else
             {
                 app.Map(options.RootPath, appChild =>
                 {
-                    ConfigureCore(appChild, env, prov, loggerFactory, options);
+                    ConfigureCore(appChild, env, prov, loggerFactory, dataDirectories);
                 });
             }
         }
-        private DirectoryInfo GetDataDir()
-        {
-            return new DirectoryInfo(Configuration.GetDataDir(DefaultConfiguration.GetNetworkType(Configuration)));
-        }
-
-        private static void ConfigureCore(IApplicationBuilder app, IWebHostEnvironment env, IServiceProvider prov, ILoggerFactory loggerFactory, BTCPayServerOptions options)
+        private static void ConfigureCore(IApplicationBuilder app, IWebHostEnvironment env, IServiceProvider prov, ILoggerFactory loggerFactory, IOptions<DataDirectories> dataDirectories)
         {
             Logs.Configure(loggerFactory);
+            app.UsePlugins();
             if (env.IsDevelopment())
             {
                 app.UseDeveloperExceptionPage();
@@ -182,7 +189,6 @@ namespace BTCPayServer.Hosting
             forwardingOptions.KnownProxies.Clear();
             forwardingOptions.ForwardedHeaders = ForwardedHeaders.All;
             app.UseForwardedHeaders(forwardingOptions);
-
 
             app.UseStatusCodePagesWithReExecute("/Error/Handle", "?statusCode={0}");
 
@@ -200,14 +206,19 @@ namespace BTCPayServer.Hosting
                     ctx.Context.Response.Headers[HeaderNames.CacheControl] = "public,max-age=" + durationInSeconds;
                 }
             });
-            
-            app.UseProviderStorage(options);
+
+            app.UseProviderStorage(dataDirectories);
             app.UseAuthentication();
             app.UseAuthorization();
             app.UseSession();
 
             app.UseWebSockets();
 
+            app.UseCookiePolicy(new CookiePolicyOptions()
+            {
+                HttpOnly = Microsoft.AspNetCore.CookiePolicy.HttpOnlyPolicy.Always,
+                Secure = Microsoft.AspNetCore.Http.CookieSecurePolicy.SameAsRequest
+            });
             app.UseEndpoints(endpoints =>
             {
                 AppHub.Register(endpoints);

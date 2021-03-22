@@ -1,12 +1,10 @@
-﻿using System;
-using System.Collections;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using NBitcoin;
 using NBXplorer;
 using NBXplorer.Models;
-using Newtonsoft.Json;
 
 namespace BTCPayServer
 {
@@ -20,48 +18,56 @@ namespace BTCPayServer
     {
         static BTCPayDefaultSettings()
         {
-            _Settings = new Dictionary<NetworkType, BTCPayDefaultSettings>();
-            foreach (var chainType in new[] { NetworkType.Mainnet, NetworkType.Testnet, NetworkType.Regtest })
+            _Settings = new Dictionary<ChainName, BTCPayDefaultSettings>();
+        }
+
+        static readonly Dictionary<ChainName, BTCPayDefaultSettings> _Settings;
+
+        public static BTCPayDefaultSettings GetDefaultSettings(ChainName chainType)
+        {
+            if (_Settings.TryGetValue(chainType, out var v))
+                return v;
+            lock (_Settings)
             {
+                if (_Settings.TryGetValue(chainType, out v))
+                    return v;
                 var settings = new BTCPayDefaultSettings();
                 _Settings.Add(chainType, settings);
                 settings.DefaultDataDirectory = StandardConfiguration.DefaultDataDirectory.GetDirectory("BTCPayServer", NBXplorerDefaultSettings.GetFolderName(chainType));
+                settings.DefaultPluginDirectory =
+                    StandardConfiguration.DefaultDataDirectory.GetDirectory("BTCPayServer", "Plugins");
                 settings.DefaultConfigurationFile = Path.Combine(settings.DefaultDataDirectory, "settings.config");
-                settings.DefaultPort = (chainType == NetworkType.Mainnet ? 23000 :
-                                                      chainType == NetworkType.Regtest ? 23002 :
-                                                      chainType == NetworkType.Testnet ? 23001 : throw new NotSupportedException(chainType.ToString()));
+                settings.DefaultPort = (chainType == ChainName.Mainnet ? 23000 :
+                                                      chainType == ChainName.Regtest ? 23002
+                                                                                     : 23001);
             }
-        }
-
-        static Dictionary<NetworkType, BTCPayDefaultSettings> _Settings;
-
-        public static BTCPayDefaultSettings GetDefaultSettings(NetworkType chainType)
-        {
             return _Settings[chainType];
         }
 
         public string DefaultDataDirectory { get; set; }
+        public string DefaultPluginDirectory { get; set; }
         public string DefaultConfigurationFile { get; set; }
         public int DefaultPort { get; set; }
     }
 
-    public class BTCPayNetwork:BTCPayNetworkBase
+    public class BTCPayNetwork : BTCPayNetworkBase
     {
-        public Network NBitcoinNetwork { get { return  NBXplorerNetwork?.NBitcoinNetwork; } }
+        public Network NBitcoinNetwork { get { return NBXplorerNetwork?.NBitcoinNetwork; } }
         public NBXplorer.NBXplorerNetwork NBXplorerNetwork { get; set; }
         public bool SupportRBF { get; internal set; }
         public string LightningImagePath { get; set; }
         public BTCPayDefaultSettings DefaultSettings { get; set; }
-        public KeyPath CoinType { get; internal set; }
-        
+        public KeyPath CoinType { get; set; }
+
         public Dictionary<uint, DerivationType> ElectrumMapping = new Dictionary<uint, DerivationType>();
 
         public virtual bool WalletSupported { get; set; } = true;
-        public virtual bool ReadonlyWallet{ get; set; } = false;
-        
+        public virtual bool ReadonlyWallet { get; set; } = false;
+        public virtual bool VaultSupported { get; set; } = false;
         public int MaxTrackedConfirmation { get; internal set; } = 6;
         public string UriScheme { get; internal set; }
         public bool SupportPayJoin { get; set; } = false;
+        public bool SupportLightning { get; set; } = true;
 
         public KeyPath GetRootKeyPath(DerivationType type)
         {
@@ -119,13 +125,34 @@ namespace BTCPayServer
         {
             return $"{UriScheme}:{cryptoInfoAddress}?amount={cryptoInfoDue.ToString(false, true)}";
         }
+
+        public virtual List<TransactionInformation> FilterValidTransactions(List<TransactionInformation> transactionInformationSet)
+        {
+            return transactionInformationSet;
+        }
     }
 
     public abstract class BTCPayNetworkBase
     {
+        private string _blockExplorerLink;
         public bool ShowSyncSummary { get; set; } = true;
-        public string CryptoCode { get; internal set; }
-        public string BlockExplorerLink { get; internal set; }
+        public string CryptoCode { get; set; }
+
+        public string BlockExplorerLink
+        {
+            get => _blockExplorerLink;
+            set
+            {
+                if (string.IsNullOrEmpty(BlockExplorerLinkDefault))
+                {
+                    BlockExplorerLinkDefault = value;
+                }
+
+                _blockExplorerLink = value;
+            }
+        }
+
+        public string BlockExplorerLinkDefault { get; internal set; }
         public string DisplayName { get; set; }
         public int Divisibility { get; set; } = 8;
         [Obsolete("Should not be needed")]
@@ -138,7 +165,7 @@ namespace BTCPayServer
         }
 
         public string CryptoImagePath { get; set; }
-        public string[] DefaultRateRules { get; internal set; } = Array.Empty<string>();
+        public string[] DefaultRateRules { get; set; } = Array.Empty<string>();
         public override string ToString()
         {
             return CryptoCode;

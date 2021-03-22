@@ -30,7 +30,6 @@
     var iframe = document.createElement('iframe');
     iframe.name = 'btcpay';
     iframe.class = 'btcpay';
-    iframe.setAttribute('allowtransparency', 'true');
     iframe.style.display = 'none';
     iframe.style.border = 0;
     iframe.style.position = 'fixed';
@@ -39,8 +38,10 @@
     iframe.style.height = '100%';
     iframe.style.width = '100%';
     iframe.style.zIndex = '2000';
+    // Removed, see https://github.com/btcpayserver/btcpayserver/issues/2139#issuecomment-768223263
+    // iframe.setAttribute('allowtransparency', 'true');
 
-    var origin = 'http://slack.btcpayserver.org join us there, and initialize this with your origin url through setApiUrlPrefix';
+    var origin = 'http://chat.btcpayserver.org join us there, and initialize this with your origin url through setApiUrlPrefix';
     var scriptMatch = thisScript.match(scriptSrcRegex)
     if (scriptMatch) {
         // We can't just take the domain as btcpay can run under a sub path with RootPath
@@ -56,6 +57,7 @@
 
     var onModalWillEnterMethod = function () { };
     var onModalWillLeaveMethod = function () { };
+    var onModalReceiveMessageMethod = function (event) { };
 
     function showFrame() {
         if (window.document.getElementsByName('btcpay').length === 0) {
@@ -80,6 +82,10 @@
         onModalWillLeaveMethod = customOnModalWillLeave;
     }
 
+    function onModalReceiveMessage(customOnModalReceiveMessage) {
+        onModalReceiveMessageMethod = customOnModalReceiveMessage;
+    }
+
     function receiveMessage(event) {
         var uri;
 
@@ -101,6 +107,7 @@
                 window.location = uri;
             }
         }
+        onModalReceiveMessageMethod(event);
     }
 
     function showInvoice(invoiceId, params) {
@@ -134,7 +141,8 @@
         showInvoice: showInvoice,
         onModalWillEnter: onModalWillEnter,
         onModalWillLeave: onModalWillLeave,
-        setApiUrlPrefix: setApiUrlPrefix
+        setApiUrlPrefix: setApiUrlPrefix,
+        onModalReceiveMessage: onModalReceiveMessage
     };
 
 })();

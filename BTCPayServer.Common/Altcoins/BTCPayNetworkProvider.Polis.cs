@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using NBitcoin;
 using NBXplorer;
 
@@ -16,7 +12,7 @@ namespace BTCPayServer
             {
                 CryptoCode = nbxplorerNetwork.CryptoCode,
                 DisplayName = "Polis",
-                BlockExplorerLink = NetworkType == NetworkType.Mainnet ? "https://blockbook.polispay.org/tx/{0}" : "https://blockbook.polispay.org/tx/{0}",
+                BlockExplorerLink = NetworkType == ChainName.Mainnet ? "https://blockbook.polispay.org/tx/{0}" : "https://blockbook.polispay.org/tx/{0}",
                 NBXplorerNetwork = nbxplorerNetwork,
                 UriScheme = "polis",
                 DefaultRateRules = new[]
@@ -26,7 +22,7 @@ namespace BTCPayServer
                 },
                 CryptoImagePath = "imlegacy/polis.png",
                 DefaultSettings = BTCPayDefaultSettings.GetDefaultSettings(NetworkType),
-                CoinType = NetworkType == NetworkType.Mainnet ? new KeyPath("1997'") : new KeyPath("1'")
+                CoinType = NetworkType == ChainName.Mainnet ? new KeyPath("1997'") : new KeyPath("1'")
             });
         }
     }

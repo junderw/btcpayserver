@@ -1,40 +1,43 @@
-﻿using BTCPayServer.Controllers;
-using System.Linq;
-using BTCPayServer.Models.AccountViewModels;
-using BTCPayServer.Models.StoreViewModels;
-using BTCPayServer.Services.Invoices;
-using Microsoft.AspNetCore.Mvc;
-using NBitcoin;
-using NBitpayClient;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
-using Amazon.S3.Model;
-using Xunit;
-using NBXplorer.DerivationStrategy;
-using BTCPayServer.Payments;
-using BTCPayServer.Payments.Lightning;
-using BTCPayServer.Tests.Logging;
+using BTCPayServer.Client;
+using BTCPayServer.Client.Models;
+using BTCPayServer.Controllers;
+using BTCPayServer.Data;
+using BTCPayServer.Events;
 using BTCPayServer.Lightning;
 using BTCPayServer.Lightning.CLightning;
-using BTCPayServer.Data;
-using Microsoft.AspNetCore.Identity;
-using NBXplorer.Models;
-using BTCPayServer.Client;
-using BTCPayServer.Events;
+using BTCPayServer.Models.AccountViewModels;
+using BTCPayServer.Models.StoreViewModels;
+using BTCPayServer.Payments.PayJoin.Sender;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Stores;
 using BTCPayServer.Services.Wallets;
+using BTCPayServer.Tests.Logging;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.CodeAnalysis.Operations;
+using NBitcoin;
+using BTCPayServer.BIP78.Sender;
 using NBitcoin.Payment;
+using NBitpayClient;
+using NBXplorer.DerivationStrategy;
+using NBXplorer.Models;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Xunit;
+using Xunit.Sdk;
 
 namespace BTCPayServer.Tests
 {
     public class TestAccount
     {
-        ServerTester parent;
+        readonly ServerTester parent;
 
         public TestAccount(ServerTester parent)
         {
@@ -76,13 +79,13 @@ namespace BTCPayServer.Tests
                         return p;
                     }).GroupBy(permission => permission.Policy).Select(p =>
                     {
-                        var stores = p.Where(permission => !string.IsNullOrEmpty(permission.StoreId))
-                            .Select(permission => permission.StoreId).ToList();
+                        var stores = p.Where(permission => !string.IsNullOrEmpty(permission.Scope))
+                            .Select(permission => permission.Scope).ToList();
                         return new ManageController.AddApiKeyViewModel.PermissionValueItem()
                         {
                             Permission = p.Key,
                             Forbidden = false,
-                            StoreMode = stores.Any()?  ManageController.AddApiKeyViewModel.ApiKeyStoreMode.Specific: ManageController.AddApiKeyViewModel.ApiKeyStoreMode.AllStores,
+                            StoreMode = stores.Any() ? ManageController.AddApiKeyViewModel.ApiKeyStoreMode.Specific : ManageController.AddApiKeyViewModel.ApiKeyStoreMode.AllStores,
                             SpecificStores = stores,
                             Value = true
                         };
@@ -136,6 +139,13 @@ namespace BTCPayServer.Tests
             modify(store);
             storeController.UpdateStore(store).GetAwaiter().GetResult();
         }
+        public Task ModifyStoreAsync(Action<StoreViewModel> modify)
+        {
+            var storeController = GetController<StoresController>();
+            StoreViewModel store = (StoreViewModel)((ViewResult)storeController.UpdateStore()).Model;
+            modify(store);
+            return storeController.UpdateStore(store);
+        }
 
         public T GetController<T>(bool setImplicitStore = true) where T : Controller
         {
@@ -145,8 +155,12 @@ namespace BTCPayServer.Tests
 
         public async Task CreateStoreAsync()
         {
+            if (UserId is null)
+            {
+                await RegisterAsync();
+            }
             var store = this.GetController<UserStoresController>();
-            await store.CreateStore(new CreateStoreViewModel() {Name = "Test Store"});
+            await store.CreateStore(new CreateStoreViewModel() { Name = "Test Store" });
             StoreId = store.CreatedStoreId;
             parent.Stores.Add(StoreId);
         }
@@ -161,16 +175,21 @@ namespace BTCPayServer.Tests
         public async Task<WalletId> RegisterDerivationSchemeAsync(string cryptoCode, ScriptPubKeyType segwit = ScriptPubKeyType.Legacy,
             bool importKeysToNBX = false)
         {
+            if (StoreId is null)
+                await CreateStoreAsync();
             SupportedNetwork = parent.NetworkProvider.GetNetwork<BTCPayNetwork>(cryptoCode);
             var store = parent.PayTester.GetController<StoresController>(UserId, StoreId);
             GenerateWalletResponseV = await parent.ExplorerClient.GenerateWalletAsync(new GenerateWalletRequest()
             {
                 ScriptPubKeyType = segwit,
                 SavePrivateKeys = importKeysToNBX,
+                ImportKeysToRPC = importKeysToNBX
             });
-            await store.AddDerivationScheme(StoreId,
-                new DerivationSchemeViewModel()
+            await store.UpdateWallet(
+                new WalletSetupViewModel
                 {
+                    StoreId = StoreId,
+                    Method = importKeysToNBX ? WalletSetupMethod.HotWallet : WalletSetupMethod.WatchOnly,
                     Enabled = true,
                     CryptoCode = cryptoCode,
                     Network = SupportedNetwork,
@@ -182,22 +201,13 @@ namespace BTCPayServer.Tests
                     KeyPath = GenerateWalletResponseV.AccountKeyPath.KeyPath.ToString(),
                     DerivationScheme = DerivationScheme.ToString(),
                     Confirmation = true
-                }, cryptoCode);
+                });
             return new WalletId(StoreId, cryptoCode);
         }
 
-        public async Task EnablePayJoin()
+        public Task EnablePayJoin()
         {
-            var storeController = parent.PayTester.GetController<StoresController>(UserId, StoreId);
-            var storeVM =
-                Assert.IsType<StoreViewModel>(Assert
-                    .IsType<ViewResult>(storeController.UpdateStore()).Model);
-
-            storeVM.PayJoinEnabled = true;
-
-            Assert.Equal(nameof(storeController.UpdateStore),
-                Assert.IsType<RedirectToActionResult>(
-                    await storeController.UpdateStore(storeVM)).ActionName);
+            return ModifyStoreAsync(s => s.PayJoinEnabled = true);
         }
 
         public GenerateWalletResponse GenerateWalletResponseV { get; set; }
@@ -247,28 +257,22 @@ namespace BTCPayServer.Tests
 
         public bool IsAdmin { get; internal set; }
 
-        public void RegisterLightningNode(string cryptoCode, LightningConnectionType connectionType)
+        public void RegisterLightningNode(string cryptoCode, LightningConnectionType connectionType, bool isMerchant = true)
         {
-            RegisterLightningNodeAsync(cryptoCode, connectionType).GetAwaiter().GetResult();
+            RegisterLightningNodeAsync(cryptoCode, connectionType, isMerchant).GetAwaiter().GetResult();
         }
-
-        public async Task RegisterLightningNodeAsync(string cryptoCode, LightningConnectionType connectionType)
+        public Task RegisterLightningNodeAsync(string cryptoCode, bool isMerchant = true, string storeId = null)
+        {
+            return RegisterLightningNodeAsync(cryptoCode, null, isMerchant, storeId);
+        }
+        public async Task RegisterLightningNodeAsync(string cryptoCode, LightningConnectionType? connectionType, bool isMerchant = true, string storeId = null)
         {
             var storeController = this.GetController<StoresController>();
 
-            string connectionString = null;
-            if (connectionType == LightningConnectionType.Charge)
-                connectionString = "type=charge;server=" + parent.MerchantCharge.Client.Uri.AbsoluteUri;
-            else if (connectionType == LightningConnectionType.CLightning)
-                connectionString = "type=clightning;server=" +
-                                   ((CLightningClient)parent.MerchantLightningD).Address.AbsoluteUri;
-            else if (connectionType == LightningConnectionType.LndREST)
-                connectionString = $"type=lnd-rest;server={parent.MerchantLnd.Swagger.BaseUrl};allowinsecure=true";
-            else
-                throw new NotSupportedException(connectionType.ToString());
+            string connectionString = parent.GetLightningConnectionString(connectionType, isMerchant);
 
-            await storeController.AddLightningNode(StoreId,
-                new LightningNodeViewModel() {ConnectionString = connectionString, SkipPortTest = true}, "save", "BTC");
+            await storeController.AddLightningNode(storeId ?? StoreId,
+                new LightningNodeViewModel() { ConnectionString = connectionString, SkipPortTest = true }, "save", "BTC");
             if (storeController.ModelState.ErrorCount != 0)
                 Assert.False(true, storeController.ModelState.FirstOrDefault().Value.Errors[0].ErrorMessage);
         }
@@ -283,7 +287,7 @@ namespace BTCPayServer.Tests
                 await cashCow.SendToAddressAsync(address, value);
             });
             int i = 0;
-            while (i <30)
+            while (i < 30)
             {
                 var result = (await btcPayWallet.GetUnspentCoins(DerivationScheme))
                     .FirstOrDefault(c => c.ScriptPubKey == address.ScriptPubKey)?.Coin;
@@ -315,18 +319,19 @@ namespace BTCPayServer.Tests
                 .GetExplorerClient(psbt.Network.NetworkSet.CryptoCode);
             psbt = (await explorerClient.UpdatePSBTAsync(new UpdatePSBTRequest()
             {
-                DerivationScheme = DerivationScheme, PSBT = psbt
+                DerivationScheme = DerivationScheme,
+                PSBT = psbt
             })).PSBT;
             return psbt.SignAll(this.DerivationScheme, GenerateWalletResponseV.AccountHDKey,
                 GenerateWalletResponseV.AccountKeyPath);
         }
 
-        public async Task<PSBT> SubmitPayjoin(Invoice invoice, PSBT psbt, string expectedError = null, bool senderError= false)
+        public async Task<PSBT> SubmitPayjoin(Invoice invoice, PSBT psbt, string expectedError = null, bool senderError = false)
         {
-            var endpoint = GetPayjoinEndpoint(invoice, psbt.Network);
+            var endpoint = GetPayjoinBitcoinUrl(invoice, psbt.Network);
             if (endpoint == null)
             {
-                return null;
+                throw new InvalidOperationException("No payjoin endpoint for the invoice");
             }
             var pjClient = parent.PayTester.GetService<PayjoinClient>();
             var storeRepository = parent.PayTester.GetService<StoreRepository>();
@@ -336,7 +341,7 @@ namespace BTCPayServer.Tests
             Logs.Tester.LogInformation($"Proposing {psbt.GetGlobalTransaction().GetHash()}");
             if (expectedError is null && !senderError)
             {
-                var proposed = await pjClient.RequestPayjoin(endpoint, settings, psbt, default);
+                var proposed = await pjClient.RequestPayjoin(endpoint, new PayjoinWallet(settings), psbt, default);
                 Logs.Tester.LogInformation($"Proposed payjoin is {proposed.GetGlobalTransaction().GetHash()}");
                 Assert.NotNull(proposed);
                 return proposed;
@@ -345,12 +350,15 @@ namespace BTCPayServer.Tests
             {
                 if (senderError)
                 {
-                    await Assert.ThrowsAsync<PayjoinSenderException>(async () => await pjClient.RequestPayjoin(endpoint, settings, psbt, default));
+                    await Assert.ThrowsAsync<PayjoinSenderException>(async () => await pjClient.RequestPayjoin(endpoint, new PayjoinWallet(settings), psbt, default));
                 }
                 else
                 {
-                    var ex = await Assert.ThrowsAsync<PayjoinReceiverException>(async () => await pjClient.RequestPayjoin(endpoint, settings, psbt, default));
-                    Assert.Equal(expectedError, ex.ErrorCode);
+                    var ex = await Assert.ThrowsAsync<PayjoinReceiverException>(async () => await pjClient.RequestPayjoin(endpoint, new PayjoinWallet(settings), psbt, default));
+                    var split = expectedError.Split('|');
+                    Assert.Equal(split[0], ex.ErrorCode);
+                    if (split.Length > 1)
+                        Assert.Contains(split[1], ex.ReceiverMessage);
                 }
                 return null;
             }
@@ -370,14 +378,19 @@ namespace BTCPayServer.Tests
         async Task<HttpResponseMessage> SubmitPayjoinCore(string content, Invoice invoice, Network network,
             string expectedError)
         {
-            var endpoint = GetPayjoinEndpoint(invoice, network);
+            var bip21 = GetPayjoinBitcoinUrl(invoice, network);
+            bip21.TryGetPayjoinEndpoint(out var endpoint);
             var response = await parent.PayTester.HttpClient.PostAsync(endpoint,
                 new StringContent(content, Encoding.UTF8, "text/plain"));
             if (expectedError != null)
             {
+                var split = expectedError.Split('|');
                 Assert.False(response.IsSuccessStatusCode);
                 var error = JObject.Parse(await response.Content.ReadAsStringAsync());
-                Assert.Equal(expectedError, error["errorCode"].Value<string>());
+                if (split.Length > 0)
+                    Assert.Equal(split[0], error["errorCode"].Value<string>());
+                if (split.Length > 1)
+                    Assert.Contains(split[1], error["message"].Value<string>());
                 return null;
             }
             else
@@ -393,12 +406,103 @@ namespace BTCPayServer.Tests
             return response;
         }
 
-        private static Uri GetPayjoinEndpoint(Invoice invoice, Network network)
+        public static BitcoinUrlBuilder GetPayjoinBitcoinUrl(Invoice invoice, Network network)
         {
             var parsedBip21 = new BitcoinUrlBuilder(
                 invoice.CryptoInfo.First(c => c.CryptoCode == network.NetworkSet.CryptoCode).PaymentUrls.BIP21,
                 network);
-            return parsedBip21.UnknowParameters.TryGetValue($"{PayjoinClient.BIP21EndpointKey}", out var uri) ? new Uri(uri, UriKind.Absolute) : null;
+            if (!parsedBip21.TryGetPayjoinEndpoint(out var endpoint))
+                return null;
+            return parsedBip21;
+        }
+
+        class WebhookListener : IDisposable
+        {
+            private Client.Models.StoreWebhookData _wh;
+            private FakeServer _server;
+            private readonly List<WebhookInvoiceEvent> _webhookEvents;
+            private CancellationTokenSource _cts;
+            public WebhookListener(Client.Models.StoreWebhookData wh, FakeServer server, List<WebhookInvoiceEvent> webhookEvents)
+            {
+                _wh = wh;
+                _server = server;
+                _webhookEvents = webhookEvents;
+                _cts = new CancellationTokenSource();
+                _ = Listen(_cts.Token);
+            }
+
+            async Task Listen(CancellationToken cancellation)
+            {
+                while (!cancellation.IsCancellationRequested)
+                {
+                    var req = await _server.GetNextRequest(cancellation);
+                    var bytes = await req.Request.Body.ReadBytesAsync((int)req.Request.Headers.ContentLength);
+                    var callback = Encoding.UTF8.GetString(bytes);
+                    _webhookEvents.Add(JsonConvert.DeserializeObject<WebhookInvoiceEvent>(callback));
+                    req.Response.StatusCode = 200;
+                    _server.Done();
+                }
+            }
+            public void Dispose()
+            {
+                _cts.Cancel();
+                _server.Dispose();
+            }
+        }
+
+        public List<WebhookInvoiceEvent> WebhookEvents { get; set; } = new List<WebhookInvoiceEvent>();
+        public TEvent AssertHasWebhookEvent<TEvent>(WebhookEventType eventType, Action<TEvent> assert) where TEvent : class
+        {
+            int retry = 0;
+            retry:
+            foreach (var evt in WebhookEvents)
+            {
+                if (evt.Type == eventType)
+                {
+                    var typedEvt = evt.ReadAs<TEvent>();
+                    try
+                    {
+                        assert(typedEvt);
+                        return typedEvt;
+                    }
+                    catch (XunitException)
+                    {
+                    }
+                }
+            }
+            if (retry < 3)
+            {
+                Thread.Sleep(1000);
+                retry++;
+                goto retry;
+            }
+            Assert.True(false, "No webhook event match the assertion");
+            return null;
+        }
+        public async Task SetupWebhook()
+        {
+            FakeServer server = new FakeServer();
+            await server.Start();
+            var client = await CreateClient(Policies.CanModifyStoreWebhooks);
+            var wh = await client.CreateWebhook(StoreId, new CreateStoreWebhookRequest()
+            {
+                AutomaticRedelivery = false,
+                Url = server.ServerUri.AbsoluteUri
+            });
+
+            parent.Resources.Add(new WebhookListener(wh, server, WebhookEvents));
+        }
+
+        public async Task PayInvoice(string invoiceId)
+        {
+            var inv = await BitPay.GetInvoiceAsync(invoiceId);
+            var net = parent.ExplorerNode.Network;
+            this.parent.ExplorerNode.SendToAddress(BitcoinAddress.Create(inv.BitcoinAddress, net), inv.BtcDue);
+            await TestUtils.EventuallyAsync(async () =>
+            {
+                var localInvoice = await BitPay.GetInvoiceAsync(invoiceId, Facade.Merchant);
+                Assert.Equal("paid", localInvoice.Status);
+            });
         }
     }
 }

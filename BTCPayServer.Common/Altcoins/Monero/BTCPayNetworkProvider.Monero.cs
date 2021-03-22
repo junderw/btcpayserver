@@ -12,7 +12,7 @@ namespace BTCPayServer
                 DisplayName = "Monero",
                 Divisibility = 12,
                 BlockExplorerLink =
-                    NetworkType == NetworkType.Mainnet
+                    NetworkType == ChainName.Mainnet
                         ? "https://www.exploremonero.com/transaction/{0}"
                         : "https://testnet.xmrchain.net/tx/{0}",
                 DefaultRateRules = new[]
@@ -20,7 +20,8 @@ namespace BTCPayServer
                     "XMR_X = XMR_BTC * BTC_X",
                     "XMR_BTC = kraken(XMR_BTC)"
                 },
-                CryptoImagePath = "/imlegacy/monero.svg"
+                CryptoImagePath = "/imlegacy/monero.svg",
+                UriScheme = "monero"
             });
         }
     }

@@ -1,11 +1,8 @@
-﻿using System;
+using System;
 using System.Linq;
-using System.Text;
-using System.Text.Encodings.Web;
 using System.Threading.Tasks;
 using BTCPayServer.Models.AppViewModels;
 using BTCPayServer.Services.Apps;
-using BTCPayServer.Services.Mails;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BTCPayServer.Controllers
@@ -74,7 +71,7 @@ namespace BTCPayServer.Controllers
 
             try
             {
-                _AppService.Parse(vm.PerksTemplate, vm.TargetCurrency).ToString();
+                vm.PerksTemplate = _AppService.SerializeTemplate(_AppService.Parse(vm.PerksTemplate, vm.TargetCurrency));
             }
             catch
             {

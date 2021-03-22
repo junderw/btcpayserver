@@ -1,11 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using NBitcoin;
-using NBitcoin.DataEncoders;
-using NBXplorer;
+using NBitcoin.Scripting;
 using NBXplorer.DerivationStrategy;
 
 namespace BTCPayServer
@@ -18,8 +15,6 @@ namespace BTCPayServer
 
         public Script HintScriptPubKey { get; set; }
 
-        Dictionary<uint, string[]> ElectrumMapping = new Dictionary<uint, string[]>();
-        
         public DerivationSchemeParser(BTCPayNetwork expectedNetwork)
         {
             if (expectedNetwork == null)
@@ -27,10 +22,81 @@ namespace BTCPayServer
             BtcPayNetwork = expectedNetwork;
         }
 
+        public (DerivationStrategyBase, RootedKeyPath[]) ParseOutputDescriptor(string str)
+        {
+            (DerivationStrategyBase, RootedKeyPath[]) ExtractFromPkProvider(PubKeyProvider pubKeyProvider,
+                string suffix = "")
+            {
+                switch (pubKeyProvider)
+                {
+                    case PubKeyProvider.Const _:
+                        throw new FormatException("Only HD output descriptors are supported.");
+                    case PubKeyProvider.HD hd:
+                        if (hd.Path != null && hd.Path.ToString() != "0")
+                        {
+                            throw new FormatException("Custom change paths are not supported.");
+                        }
+
+                        return (Parse($"{hd.Extkey}{suffix}"), null);
+                    case PubKeyProvider.Origin origin:
+                        var innerResult = ExtractFromPkProvider(origin.Inner, suffix);
+                        return (innerResult.Item1, new[] {origin.KeyOriginInfo});
+                    default:
+                        throw new ArgumentOutOfRangeException();
+                }
+            }
+            
+            if (str == null)
+                throw new ArgumentNullException(nameof(str));
+            str = str.Trim();
+            var outputDescriptor = OutputDescriptor.Parse(str);
+            switch(outputDescriptor)
+            {
+                case OutputDescriptor.PK _:
+                case OutputDescriptor.Raw _:
+                case OutputDescriptor.Addr _:
+                    throw new FormatException("Only HD output descriptors are supported.");
+                case OutputDescriptor.Combo _:
+                    throw new FormatException("Only output descriptors of one format are supported.");
+                case OutputDescriptor.Multi multi:
+                    var xpubs = multi.PkProviders.Select(provider => ExtractFromPkProvider(provider));
+                    return (
+                        Parse(
+                            $"{multi.Threshold}-of-{(string.Join('-', xpubs.Select(tuple => tuple.Item1.ToString())))}{(multi.IsSorted?"":"-[keeporder]")}"),
+                        xpubs.SelectMany(tuple => tuple.Item2).ToArray());
+                case OutputDescriptor.PKH pkh:
+                    return ExtractFromPkProvider(pkh.PkProvider, "-[legacy]");
+                case OutputDescriptor.SH sh:
+                    var suffix = "-[p2sh]";
+                    if (sh.Inner is OutputDescriptor.Multi)
+                    {
+                        //non segwit
+                        suffix = "-[legacy]";
+                    }
+
+                    if (sh.Inner is OutputDescriptor.Multi || sh.Inner is OutputDescriptor.WPKH ||
+                        sh.Inner is OutputDescriptor.WSH)
+                    {
+                        var ds = ParseOutputDescriptor(sh.Inner.ToString());
+                        return (Parse(ds.Item1 + suffix), ds.Item2);
+                    };
+                    throw new FormatException("sh descriptors are only supported with multsig(legacy or p2wsh) and segwit(p2wpkh)");
+                case OutputDescriptor.WPKH wpkh:
+                    return ExtractFromPkProvider(wpkh.PkProvider, "");
+                case OutputDescriptor.WSH wsh:
+                    if (wsh.Inner is OutputDescriptor.Multi)
+                    {
+                        return  ParseOutputDescriptor(wsh.Inner.ToString());
+                    }
+                    throw new FormatException("wsh descriptors are only supported with multisig");
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(outputDescriptor));
+            }
+        }
 
         public DerivationStrategyBase ParseElectrum(string str)
         {
-            
+
             if (str == null)
                 throw new ArgumentNullException(nameof(str));
             str = str.Trim();
@@ -42,7 +108,7 @@ namespace BTCPayServer
             var standardPrefix = Utils.ToBytes(0x0488b21eU, false);
             for (int ii = 0; ii < 4; ii++)
                 data[ii] = standardPrefix[ii];
-            var extPubKey = new BitcoinExtPubKey(Network.GetBase58CheckEncoder().EncodeData(data), Network.Main).ToNetwork(Network);
+            var extPubKey = GetBitcoinExtPubKeyByNetwork(Network, data);
             if (!BtcPayNetwork.ElectrumMapping.TryGetValue(prefix, out var type))
             {
                 throw new FormatException();
@@ -119,7 +185,8 @@ namespace BTCPayServer
                     var standardPrefix = Utils.ToBytes(0x0488b21eU, false);
                     for (int ii = 0; ii < 4; ii++)
                         data[ii] = standardPrefix[ii];
-                    var derivationScheme = new BitcoinExtPubKey(Network.GetBase58CheckEncoder().EncodeData(data), Network.Main).ToNetwork(Network).ToString();
+
+                    var derivationScheme = GetBitcoinExtPubKeyByNetwork(Network, data).ToString();
 
                     if (BtcPayNetwork.ElectrumMapping.TryGetValue(prefix, out var type))
                     {
@@ -154,6 +221,18 @@ namespace BTCPayServer
             }
 
             return FindMatch(hintedLabels, BtcPayNetwork.NBXplorerNetwork.DerivationStrategyFactory.Parse(str));
+        }
+
+        public static BitcoinExtPubKey GetBitcoinExtPubKeyByNetwork(Network network, byte[] data)
+        {
+            try
+            {
+                return new BitcoinExtPubKey(network.GetBase58CheckEncoder().EncodeData(data), network.NetworkSet.Mainnet).ToNetwork(network);
+            }
+            catch (Exception)
+            {
+                return new BitcoinExtPubKey(network.GetBase58CheckEncoder().EncodeData(data), Network.Main).ToNetwork(network);
+            }
         }
 
         private DerivationStrategyBase FindMatch(HashSet<string> hintLabels, DerivationStrategyBase result)

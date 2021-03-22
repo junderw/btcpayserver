@@ -1,3 +1,4 @@
+#if ALTCOINS
 using System.Collections.Generic;
 using System.Linq;
 using NBitcoin;
@@ -23,6 +24,15 @@ namespace BTCPayServer
             });
         }
 
+        public override List<TransactionInformation> FilterValidTransactions(List<TransactionInformation> transactionInformationSet)
+        {
+            return transactionInformationSet.FindAll(information =>
+                information.Outputs.Any(output =>
+                    output.Value is AssetMoney assetMoney && assetMoney.AssetId == AssetId) ||
+                information.Inputs.Any(output =>
+                    output.Value is AssetMoney assetMoney && assetMoney.AssetId == AssetId));
+        }
+
         public override string GenerateBIP21(string cryptoInfoAddress, Money cryptoInfoDue)
         {
             //precision 0: 10 = 0.00000010
@@ -33,3 +43,4 @@ namespace BTCPayServer
         }
     }
 }
+#endif

@@ -1,10 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+using System;
 using System.Threading.Tasks;
-using BTCPayServer.Configuration;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BTCPayServer.Filters
 {
@@ -16,15 +14,17 @@ namespace BTCPayServer.Filters
         {
             _cryptoCode = cryptoCode;
         }
+
         public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
         {
-            var options = context.HttpContext.RequestServices.GetService(typeof(BTCPayServerOptions)) as BTCPayServerOptions;
-            if (options.NetworkProvider.GetNetwork(_cryptoCode) == null)
+            var options = context.HttpContext.RequestServices.GetService<BTCPayNetworkProvider>();
+            if (options.GetNetwork(_cryptoCode) == null)
             {
                 context.Result = new NotFoundResult();
                 return;
             }
-            await next();   
+
+            await next();
         }
     }
 }

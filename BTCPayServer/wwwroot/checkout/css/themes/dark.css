@@ -38,8 +38,30 @@ html {
     background-color: #333333; /* messes up bottom border radius */
 }
 
-.expired__body {
+.vex.vex-theme-btcpay .vex-content {
     color: #fff;
+    background-color: #333;
+}
+
+.vex.vex-theme-btcpay .vex-content .vexmenuitem {
+    border-bottom-color: #8f979e;
+}
+
+.vex.vex-theme-btcpay .vex-content .vexmenuitem:hover {
+    background-color: #292929;
+}
+
+.vex.vex-theme-btcpay .vex-content a {
+    color: inherit;
+}
+
+.expired__body,
+.success-message {
+    color: #fff;
+}
+
+line-items .line-items__item {
+    color: #8D8D8F;
 }
 
 .currency-selection {
@@ -85,7 +107,7 @@ canvas {
 }
 
 #prettydropdown-DefaultLang ul {
-    color: #565d6e !important;
+    color: #818a91 !important;
     background-color: #191919;
 }
 
